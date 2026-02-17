@@ -1,5 +1,6 @@
 import sys
-sys.path.append('core')
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'core'))
 
 import argparse
 import glob
@@ -39,6 +40,11 @@ def demo(args):
         for (imfile1, imfile2) in tqdm(list(zip(left_images, right_images))):
             image1 = load_image(imfile1)
             image2 = load_image(imfile2)
+            # Get rid of fourth channel if it exists
+            if image1.shape[1]==4:
+                image1 = image1[:, :3, :, :]
+            if image2.shape[1]==4:
+                image2 = image2[:, :3, :, :]
 
             padder = InputPadder(image1.shape, divis_by=32)
             image1, image2 = padder.pad(image1, image2)

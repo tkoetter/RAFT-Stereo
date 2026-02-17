@@ -8,7 +8,7 @@ from core.utils.utils import coords_grid, upflow8
 
 
 try:
-    autocast = torch.cuda.amp.autocast
+    autocast = torch.amp.autocast
 except:
     # dummy autocast for PyTorch < 1.6
     class autocast:
@@ -74,7 +74,7 @@ class RAFTStereo(nn.Module):
         image2 = (2 * (image2 / 255.0) - 1.0).contiguous()
 
         # run the context network
-        with autocast(enabled=self.args.mixed_precision):
+        with autocast('cuda',enabled=self.args.mixed_precision):
             if self.args.shared_backbone:
                 *cnet_list, x = self.cnet(torch.cat((image1, image2), dim=0), dual_inp=True, num_layers=self.args.n_gru_layers)
                 fmap1, fmap2 = self.conv2(x).split(dim=0, split_size=x.shape[0]//2)
@@ -109,7 +109,7 @@ class RAFTStereo(nn.Module):
             coords1 = coords1.detach()
             corr = corr_fn(coords1) # index correlation volume
             flow = coords1 - coords0
-            with autocast(enabled=self.args.mixed_precision):
+            with autocast('cuda',enabled=self.args.mixed_precision):
                 if self.args.n_gru_layers == 3 and self.args.slow_fast_gru: # Update low-res GRU
                     net_list = self.update_block(net_list, inp_list, iter32=True, iter16=False, iter08=False, update=False)
                 if self.args.n_gru_layers >= 2 and self.args.slow_fast_gru:# Update low-res GRU and mid-res GRU
