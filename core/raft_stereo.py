@@ -7,17 +7,6 @@ from core.corr import CorrBlock1D, PytorchAlternateCorrBlock1D, CorrBlockFast1D,
 from core.utils.utils import coords_grid, upflow8
 
 
-try:
-    autocast = torch.amp.autocast
-except:
-    # dummy autocast for PyTorch < 1.6
-    class autocast:
-        def __init__(self, enabled):
-            pass
-        def __enter__(self):
-            pass
-        def __exit__(self, *args):
-            pass
 
 class RAFTStereo(nn.Module):
     def __init__(self, args):
@@ -47,8 +36,8 @@ class RAFTStereo(nn.Module):
         """ Flow is represented as difference between two coordinate grids flow = coords1 - coords0"""
         N, _, H, W = img.shape
 
-        coords0 = coords_grid(N, H, W).to(img.device)
-        coords1 = coords_grid(N, H, W).to(img.device)
+        coords0 = coords_grid(N, H, W, device=img.device)
+        coords1 = coords_grid(N, H, W, device=img.device)
 
         return coords0, coords1
 
@@ -74,18 +63,17 @@ class RAFTStereo(nn.Module):
         image2 = (2 * (image2 / 255.0) - 1.0).contiguous()
 
         # run the context network
-        with autocast('cuda',enabled=self.args.mixed_precision):
-            if self.args.shared_backbone:
-                *cnet_list, x = self.cnet(torch.cat((image1, image2), dim=0), dual_inp=True, num_layers=self.args.n_gru_layers)
-                fmap1, fmap2 = self.conv2(x).split(dim=0, split_size=x.shape[0]//2)
-            else:
-                cnet_list = self.cnet(image1, num_layers=self.args.n_gru_layers)
-                fmap1, fmap2 = self.fnet([image1, image2])
-            net_list = [torch.tanh(x[0]) for x in cnet_list]
-            inp_list = [torch.relu(x[1]) for x in cnet_list]
+        if self.args.shared_backbone:
+            *cnet_list, x = self.cnet(torch.cat((image1, image2), dim=0), dual_inp=True, num_layers=self.args.n_gru_layers)
+            fmap1, fmap2 = self.conv2(x).split(dim=0, split_size=x.shape[0]//2)
+        else:
+            cnet_list = self.cnet(image1, num_layers=self.args.n_gru_layers)
+            fmap1, fmap2 = self.fnet([image1, image2])
+        net_list = [torch.tanh(x[0]) for x in cnet_list]
+        inp_list = [torch.relu(x[1]) for x in cnet_list]
 
-            # Rather than running the GRU's conv layers on the context features multiple times, we do it once at the beginning 
-            inp_list = [list(conv(i).split(split_size=conv.out_channels//3, dim=1)) for i,conv in zip(inp_list, self.context_zqr_convs)]
+        # Rather than running the GRU's conv layers on the context features multiple times, we do it once at the beginning
+        inp_list = [list(conv(i).split(split_size=conv.out_channels//3, dim=1)) for i,conv in zip(inp_list, self.context_zqr_convs)]
 
         if self.args.corr_implementation == "reg": # Default
             corr_block = CorrBlock1D
@@ -109,12 +97,11 @@ class RAFTStereo(nn.Module):
             coords1 = coords1.detach()
             corr = corr_fn(coords1) # index correlation volume
             flow = coords1 - coords0
-            with autocast('cuda',enabled=self.args.mixed_precision):
-                if self.args.n_gru_layers == 3 and self.args.slow_fast_gru: # Update low-res GRU
-                    net_list = self.update_block(net_list, inp_list, iter32=True, iter16=False, iter08=False, update=False)
-                if self.args.n_gru_layers >= 2 and self.args.slow_fast_gru:# Update low-res GRU and mid-res GRU
-                    net_list = self.update_block(net_list, inp_list, iter32=self.args.n_gru_layers==3, iter16=True, iter08=False, update=False)
-                net_list, up_mask, delta_flow = self.update_block(net_list, inp_list, corr, flow, iter32=self.args.n_gru_layers==3, iter16=self.args.n_gru_layers>=2)
+            if self.args.n_gru_layers == 3 and self.args.slow_fast_gru: # Update low-res GRU
+                net_list = self.update_block(net_list, inp_list, iter32=True, iter16=False, iter08=False, update=False)
+            if self.args.n_gru_layers >= 2 and self.args.slow_fast_gru:# Update low-res GRU and mid-res GRU
+                net_list = self.update_block(net_list, inp_list, iter32=self.args.n_gru_layers==3, iter16=True, iter08=False, update=False)
+            net_list, up_mask, delta_flow = self.update_block(net_list, inp_list, corr, flow, iter32=self.args.n_gru_layers==3, iter16=self.args.n_gru_layers>=2)
 
             # in stereo mode, project flow onto epipolar
             delta_flow[:,1] = 0.0
